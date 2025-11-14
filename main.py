@@ -1,8 +1,13 @@
 import os
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
+from typing import List, Optional
 
-app = FastAPI()
+from database import db, create_document, get_documents
+from schemas import CharacterModel
+
+app = FastAPI(title="3D Character Shop API")
 
 app.add_middleware(
     CORSMiddleware,
@@ -14,15 +19,105 @@ app.add_middleware(
 
 @app.get("/")
 def read_root():
-    return {"message": "Hello from FastAPI Backend!"}
+    return {"message": "3D Character Shop API running"}
 
-@app.get("/api/hello")
-def hello():
-    return {"message": "Hello from the backend API!"}
+@app.get("/schema")
+def get_schema():
+    # Return minimal info about schemas for the viewer
+    return {
+        "collections": [
+            {
+                "name": "charactermodel",
+                "schema": CharacterModel.model_json_schema(),
+            }
+        ]
+    }
+
+# Seed some demo models if collection empty (helper)
+@app.post("/seed")
+def seed_demo_models():
+    if db is None:
+        raise HTTPException(status_code=500, detail="Database not configured")
+    existing = db["charactermodel"].count_documents({})
+    if existing > 0:
+        return {"seeded": False, "message": "Collection already has documents"}
+
+    demo_items = [
+        CharacterModel(
+            name="Neon Runner",
+            description="Stylized cyberpunk runner with glowing accents",
+            price=29.0,
+            thumbnail_url="https://images.unsplash.com/photo-1542751371-adc38448a05e?w=800&q=80&auto=format&fit=crop",
+            preview_url="https://youtu.be/dQw4w9WgXcQ",
+            tags=["cyberpunk", "stylized", "game-ready"],
+            formats=["FBX", "GLB"],
+            polycount="28k tris",
+            rigged=True,
+            animated=True,
+            rating=4.6,
+        ),
+        CharacterModel(
+            name="Forest Guardian",
+            description="Fantasy archer with cloak and light armor",
+            price=39.0,
+            thumbnail_url="https://images.unsplash.com/photo-1605721911519-3dfeb3be25e7?w=800&q=80&auto=format&fit=crop",
+            tags=["fantasy", "archer", "PBR"],
+            formats=["FBX", "OBJ"],
+            polycount="32k tris",
+            rigged=True,
+            animated=False,
+            rating=4.8,
+        ),
+        CharacterModel(
+            name="Mech Scout",
+            description="Compact sci-fi mech with emissive details",
+            price=24.0,
+            thumbnail_url="https://images.unsplash.com/photo-1517694712202-14dd9538aa97?w=800&q=80&auto=format&fit=crop",
+            tags=["sci-fi", "mech", "low-poly"],
+            formats=["GLB"],
+            polycount="18k tris",
+            rigged=False,
+            animated=False,
+            rating=4.2,
+        ),
+    ]
+
+    for item in demo_items:
+        create_document("charactermodel", item)
+
+    return {"seeded": True, "count": len(demo_items)}
+
+# Public endpoints
+class ListQuery(BaseModel):
+    tag: Optional[str] = None
+    q: Optional[str] = None
+    limit: int = 50
+
+@app.get("/models")
+def list_models(tag: Optional[str] = None, q: Optional[str] = None, limit: int = 50):
+    if db is None:
+        # allow frontend to still demo without DB
+        return []
+    filt = {}
+    if tag:
+        filt["tags"] = {"$in": [tag]}
+    if q:
+        filt["$or"] = [
+            {"name": {"$regex": q, "$options": "i"}},
+            {"description": {"$regex": q, "$options": "i"}},
+        ]
+    docs = get_documents("charactermodel", filt, limit)
+    # Convert ObjectId and datetimes
+    def convert(doc):
+        doc["id"] = str(doc.pop("_id", ""))
+        for k in ["created_at", "updated_at"]:
+            if k in doc and hasattr(doc[k], "isoformat"):
+                doc[k] = doc[k].isoformat()
+        return doc
+    return [convert(d) for d in docs]
 
 @app.get("/test")
 def test_database():
-    """Test endpoint to check if database is available and accessible"""
     response = {
         "backend": "✅ Running",
         "database": "❌ Not Available",
@@ -31,39 +126,26 @@ def test_database():
         "connection_status": "Not Connected",
         "collections": []
     }
-    
     try:
-        # Try to import database module
-        from database import db
-        
         if db is not None:
             response["database"] = "✅ Available"
             response["database_url"] = "✅ Configured"
-            response["database_name"] = db.name if hasattr(db, 'name') else "✅ Connected"
+            response["database_name"] = db.name
             response["connection_status"] = "Connected"
-            
-            # Try to list collections to verify connectivity
             try:
                 collections = db.list_collection_names()
-                response["collections"] = collections[:10]  # Show first 10 collections
+                response["collections"] = collections[:10]
                 response["database"] = "✅ Connected & Working"
             except Exception as e:
                 response["database"] = f"⚠️  Connected but Error: {str(e)[:50]}"
         else:
             response["database"] = "⚠️  Available but not initialized"
-            
-    except ImportError:
-        response["database"] = "❌ Database module not found (run enable-database first)"
     except Exception as e:
         response["database"] = f"❌ Error: {str(e)[:50]}"
-    
-    # Check environment variables
-    import os
+
     response["database_url"] = "✅ Set" if os.getenv("DATABASE_URL") else "❌ Not Set"
     response["database_name"] = "✅ Set" if os.getenv("DATABASE_NAME") else "❌ Not Set"
-    
     return response
-
 
 if __name__ == "__main__":
     import uvicorn

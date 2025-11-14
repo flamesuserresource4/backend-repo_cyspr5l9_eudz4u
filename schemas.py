@@ -11,8 +11,8 @@ Model name is converted to lowercase for the collection name:
 - BlogPost -> "blogs" collection
 """
 
-from pydantic import BaseModel, Field
-from typing import Optional
+from pydantic import BaseModel, Field, HttpUrl
+from typing import Optional, List
 
 # Example schemas (replace with your own):
 
@@ -37,6 +37,25 @@ class Product(BaseModel):
     price: float = Field(..., ge=0, description="Price in dollars")
     category: str = Field(..., description="Product category")
     in_stock: bool = Field(True, description="Whether product is in stock")
+
+# 3D Character Model schema for the shop
+class CharacterModel(BaseModel):
+    """
+    3D Character models for sale
+    Collection name: "charactermodel"
+    """
+    name: str = Field(..., description="Model name")
+    description: Optional[str] = Field(None, description="Description of the model")
+    price: float = Field(..., ge=0, description="Price in USD")
+    thumbnail_url: Optional[HttpUrl] = Field(None, description="Thumbnail image URL")
+    preview_url: Optional[HttpUrl] = Field(None, description="Optional 3D viewer or video preview URL")
+    tags: List[str] = Field(default_factory=list, description="Tags like stylized, sci-fi, fantasy")
+    formats: List[str] = Field(default_factory=lambda: ["FBX", "OBJ", "GLB"], description="Included file formats")
+    polycount: Optional[str] = Field(None, description="Polycount info, e.g., 25k tris")
+    rigged: bool = Field(default=False, description="Whether rigging is included")
+    animated: bool = Field(default=False, description="Whether animation clips are included")
+    rating: Optional[float] = Field(None, ge=0, le=5, description="Average rating 0-5")
+    downloads: int = Field(default=0, ge=0, description="Number of purchases/downloads")
 
 # Add your own schemas here:
 # --------------------------------------------------
