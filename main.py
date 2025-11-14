@@ -3,6 +3,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import List, Optional
+from uuid import uuid4
 
 from database import db, create_document, get_documents
 from schemas import CharacterModel
@@ -115,6 +116,67 @@ def list_models(tag: Optional[str] = None, q: Optional[str] = None, limit: int =
                 doc[k] = doc[k].isoformat()
         return doc
     return [convert(d) for d in docs]
+
+# --- Simple Checkout Endpoint ---
+class CheckoutItem(BaseModel):
+    id: str
+    qty: int
+
+class CheckoutRequest(BaseModel):
+    items: List[CheckoutItem]
+
+@app.post("/checkout")
+def checkout(payload: CheckoutRequest):
+    if db is None:
+        raise HTTPException(status_code=500, detail="Database not configured")
+    if not payload.items:
+        raise HTTPException(status_code=400, detail="No items in checkout")
+
+    # Fetch items and compute totals
+    ids = [i.id for i in payload.items]
+    qty_map = {i.id: max(1, i.qty) for i in payload.items}
+
+    from bson import ObjectId
+    # Collect docs that exist
+    found = list(db["charactermodel"].find({"_id": {"$in": [ObjectId(i) for i in ids if ObjectId.is_valid(i)]}}))
+
+    if not found:
+        raise HTTPException(status_code=404, detail="Models not found")
+
+    # Update downloads counters
+    for doc in found:
+        inc = qty_map.get(str(doc["_id"]), 1)
+        try:
+            db["charactermodel"].update_one({"_id": doc["_id"]}, {"$inc": {"downloads": inc}})
+        except Exception:
+            pass
+
+    # Build receipt
+    line_items = []
+    subtotal = 0.0
+    for doc in found:
+        q = qty_map.get(str(doc["_id"]), 1)
+        price = float(doc.get("price", 0))
+        total = price * q
+        subtotal += total
+        line_items.append({
+            "id": str(doc["_id"]),
+            "name": doc.get("name"),
+            "qty": q,
+            "price": price,
+            "line_total": total,
+            "download_links": [
+                # In a real app these would be signed URLs
+                doc.get("preview_url") or doc.get("thumbnail_url")
+            ]
+        })
+
+    return {
+        "order_id": str(uuid4()),
+        "items": line_items,
+        "subtotal": subtotal,
+        "message": "Order confirmed. Download links are ready.",
+    }
 
 @app.get("/test")
 def test_database():
